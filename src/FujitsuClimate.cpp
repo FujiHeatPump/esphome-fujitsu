@@ -92,34 +92,61 @@ optional<FujiFanMode> FujitsuClimate::espToFujiFanMode(
 }
 
 void FujitsuClimate::updateState() {
-    climate::ClimateCall call(this);
+    bool updated = false;
 
-    if (this->_heatPump.getTemp() != target_temperature) {
-        call.set_target_temperature(this->_heatPump.getTemp());
+    if (this->_heatPump.getTemp() != this->target_temperature) {
+        ESP_LOGD("fuji",
+                "ctrl temp %d vs my temp %d", this->_heatPump.getTemp(), this->target_temperature);
+        this->target_temperature = this->_heatPump.getTemp();
+        updated = true;
     }
 
     auto newMode = fujiToEspMode((FujiMode)this->_heatPump.getMode());
-    if (newMode != this->mode) {
-        call.set_mode(fujiToEspMode((FujiMode)this->_heatPump.getMode()));
+    if (newMode.has_value() && this->_heatPump.getOnOff() && newMode.value() != this->mode) {
+        ESP_LOGD("fuji",
+                 "ctrl mode %d vs my mode %d", newMode.value(), this->mode);
+        this->mode = newMode.value();
+        updated = true;
     }
 
     auto newFanMode =
         fujiToEspFanMode((FujiFanMode)this->_heatPump.getFanMode());
-    if (newFanMode != this->fan_mode) {
-        call.set_fan_mode(newFanMode);
+    if (newFanMode.has_value() && newFanMode.value() != this->fan_mode) {
+        ESP_LOGD(
+            "fujitsu",
+            "ctrl fan mode %d vs my fan mode %d", newFanMode.value(), this->fan_mode.value_or(-1));
+        this->fan_mode = newFanMode.value();
+        updated = true;
     }
 
-    if (this->_heatPump.getEconomyMode() &&
-        this->preset != climate::ClimatePreset::CLIMATE_PRESET_ECO) {
-        call.set_preset(climate::ClimatePreset::CLIMATE_PRESET_ECO);
-    }
-
-    if (!this->_heatPump.getEconomyMode() &&
+    if (this->_heatPump.getEconomyMode() && this->preset != climate::ClimatePreset::CLIMATE_PRESET_ECO) {
+        ESP_LOGD(
+            "fujitsu",
+            "ECO mode turned on by controller, adding preset change to call %d ", this->_heatPump.getEconomyMode());
+        
+        this->preset = climate::ClimatePreset::CLIMATE_PRESET_ECO;
+        updated = true;
+    }else if (!this->_heatPump.getEconomyMode() &&
         this->preset == climate::ClimatePreset::CLIMATE_PRESET_ECO) {
-        call.set_preset(climate::ClimatePreset::CLIMATE_PRESET_NONE);
+        ESP_LOGD(
+            "fujitsu",
+            "ECO mode turned off by controller, adding preset change to call, %d", this->_heatPump.getEconomyMode());
+        
+        this->preset = climate::ClimatePreset::CLIMATE_PRESET_NONE;
+        updated = true;
     }
 
-    call.perform();
+    if (!this->_heatPump.getOnOff() && this->mode != climate::ClimateMode::CLIMATE_MODE_OFF) {
+        ESP_LOGD("fuji",
+                 "Controller turned off AC, adding mode change to call");
+        this->mode = climate::ClimateMode::CLIMATE_MODE_OFF;
+        updated = true;
+    }
+
+    if (updated) {
+        ESP_LOGD("fuji", "publishing state");
+        this->publish_state();
+    }
 }
 
 void FujitsuClimate::loop() {
@@ -140,35 +167,40 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
     bool updated = false;
 
     if (call.get_mode().has_value()) {
-        climate::ClimateMode mode = *call.get_mode();
+        climate::ClimateMode callMode = call.get_mode().value();
+        ESP_LOGD("fuji", "Fuji setting mode %d", callMode);
 
-        this->mode = mode;
-        ESP_LOGD("fuji", "Fuji setting mode %d", mode);
-        auto fujiMode = this->espToFujiMode(this->mode);
+        auto fujiMode = this->espToFujiMode(callMode);
         if (fujiMode.has_value()) {
             this->_heatPump.setMode(static_cast<byte>(fujiMode.value()));
+            if (callMode != climate::ClimateMode::CLIMATE_MODE_OFF) {
+                this->_heatPump.setOnOff(true);
+            }
+            updated = true;
         }
-        updated = true;
+
+        if (callMode == climate::ClimateMode::CLIMATE_MODE_OFF) {
+            this->_heatPump.setOnOff(false);
+            updated = true;
+        }
     }
     if (call.get_target_temperature().has_value()) {
-        this->target_temperature = call.get_target_temperature().value();
-        this->_heatPump.setTemp(this->target_temperature);
+        auto callTargetTemperatur = call.get_target_temperature().value();
+        this->_heatPump.setTemp(callTargetTemperatur);
         updated = true;
-        ESP_LOGD("fuji", "Fuji setting temperature %f",
-                 this->target_temperature);
+        ESP_LOGD("fuji", "Fuji setting temperature %f", callTargetTemperatur);
     }
 
     if (call.get_preset().has_value()) {
-        this->preset = call.get_preset().value();
-        this->_heatPump.setEconomyMode(
-            this->preset.value() == climate::ClimatePreset::CLIMATE_PRESET_ECO);
+        auto callPreset = call.get_preset().value();
+        this->_heatPump.setEconomyMode(static_cast<byte>(callPreset == climate::ClimatePreset::CLIMATE_PRESET_ECO ? 1 : 0));
         updated = true;
-        ESP_LOGD("fuji", "Fuji setting preset %d", this->preset);
+        ESP_LOGD("fuji", "Fuji setting preset %d", callPreset);
     }
 
     if (call.get_fan_mode().has_value()) {
-        this->fan_mode = call.get_fan_mode().value();
-        auto fujiFanMode = this->espToFujiFanMode(this->fan_mode.value());
+        auto callFanMode = call.get_fan_mode().value();
+        auto fujiFanMode = this->espToFujiFanMode(callFanMode);
         if (fujiFanMode.has_value()) {
             this->_heatPump.setFanMode(static_cast<byte>(fujiFanMode.value()));
         }
@@ -177,12 +209,15 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
     }
 
     if (updated) {
-        this->publish_state();
+        if (this->_heatPump.waitForFrame()) {
+            delay(60);
+            ESP_LOGD("fuji", "sending pending frame after api update");
+            this->_heatPump.sendPendingFrame();
+        }
     }
 }
 
 climate::ClimateTraits FujitsuClimate::traits() {
-    ESP_LOGD("fuji", "Fuji traits called");
     auto traits = climate::ClimateTraits();
 
     traits.set_supports_current_temperature(true);
