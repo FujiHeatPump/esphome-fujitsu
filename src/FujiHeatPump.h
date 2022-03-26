@@ -106,6 +106,7 @@ class FujiHeatPump {
     void setEconomyMode(byte em);
     void setSwingMode(byte sm);
     void setSwingStep(byte ss);
+    void setState(FujiFrame * state);
 
     bool getOnOff();
     byte getTemp();
@@ -118,9 +119,9 @@ class FujiHeatPump {
 
     FujiFrame *getCurrentState();
     FujiFrame *getUpdateState();
+    
     byte getUpdateFields();
 
-    bool debugPrint = false;
 };
 
 enum class FujiMode : byte {

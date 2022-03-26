@@ -5,9 +5,31 @@
 namespace esphome {
 namespace fujitsu {
 
+void serialTask(void *pvParameters) {
+    FujitsuClimate *climate = (FujitsuClimate *)pvParameters;
+    ESP_LOGD("fuji", "serialTask started on core %d", xPortGetCoreID());
+
+    for (;;) {
+        if (climate->heatPump.waitForFrame()) {
+            delay(60);
+            climate->heatPump.sendPendingFrame();
+        }
+        if (xSemaphoreTake(climate->lock, (TickType_t)200) == pdTRUE) {
+            memcpy(&(climate->sharedState), climate->heatPump.getCurrentState(),
+                   sizeof(FujiFrame));
+            xSemaphoreGive(climate->lock);
+        }
+    }
+}
+
 void FujitsuClimate::setup() {
     ESP_LOGD("fuji", "Fuji initialized");
-    this->_heatPump.connect(&Serial2, true);
+    this->lock = xSemaphoreCreateBinary();
+    memcpy(&(this->sharedState), this->heatPump.getCurrentState(),
+           sizeof(FujiFrame));
+    this->heatPump.connect(&Serial2, true);
+    xTaskCreatePinnedToCore(serialTask, "FujiTask", 10000, (void *)this, configMAX_PRIORITIES - 1,
+                            &(this->taskHandle), 1);
 }
 
 optional<climate::ClimateMode> FujitsuClimate::fujiToEspMode(
@@ -93,54 +115,66 @@ optional<FujiFanMode> FujitsuClimate::espToFujiFanMode(
 
 void FujitsuClimate::updateState() {
     bool updated = false;
+    if (xSemaphoreTake(this->lock, TickType_t(200)) == pdTRUE) {
+        if (this->current_temperature != this->sharedState.temperature) {
+            this->current_temperature = this->sharedState.temperature;
+            updated = true;
+        }
 
-    if (this->_heatPump.getTemp() != this->target_temperature) {
-        ESP_LOGD("fuji",
-                "ctrl temp %d vs my temp %d", this->_heatPump.getTemp(), this->target_temperature);
-        this->target_temperature = this->_heatPump.getTemp();
-        updated = true;
-    }
+        if (this->sharedState.controllerTemp != this->target_temperature) {
+            ESP_LOGD("fuji", "ctrl temp %d vs my temp %d",
+                     this->sharedState.controllerTemp,
+                     this->target_temperature);
+            this->target_temperature = this->sharedState.controllerTemp;
+            updated = true;
+        }
 
-    auto newMode = fujiToEspMode((FujiMode)this->_heatPump.getMode());
-    if (newMode.has_value() && this->_heatPump.getOnOff() && newMode.value() != this->mode) {
-        ESP_LOGD("fuji",
-                 "ctrl mode %d vs my mode %d", newMode.value(), this->mode);
-        this->mode = newMode.value();
-        updated = true;
-    }
+        auto newMode = fujiToEspMode((FujiMode)this->sharedState.acMode);
+        if (newMode.has_value() && this->sharedState.onOff &&
+            newMode.value() != this->mode) {
+            ESP_LOGD("fuji", "ctrl mode %d vs my mode %d", newMode.value(),
+                     this->mode);
+            this->mode = newMode.value();
+            updated = true;
+        }
 
-    auto newFanMode =
-        fujiToEspFanMode((FujiFanMode)this->_heatPump.getFanMode());
-    if (newFanMode.has_value() && newFanMode.value() != this->fan_mode) {
-        ESP_LOGD(
-            "fujitsu",
-            "ctrl fan mode %d vs my fan mode %d", newFanMode.value(), this->fan_mode.value_or(-1));
-        this->fan_mode = newFanMode.value();
-        updated = true;
-    }
+        auto newFanMode =
+            fujiToEspFanMode((FujiFanMode)this->sharedState.fanMode);
+        if (newFanMode.has_value() && newFanMode.value() != this->fan_mode) {
+            ESP_LOGD("fujitsu", "ctrl fan mode %d vs my fan mode %d",
+                     newFanMode.value(), this->fan_mode.value_or(-1));
+            this->fan_mode = newFanMode.value();
+            updated = true;
+        }
 
-    if (this->_heatPump.getEconomyMode() && this->preset != climate::ClimatePreset::CLIMATE_PRESET_ECO) {
-        ESP_LOGD(
-            "fujitsu",
-            "ECO mode turned on by controller, adding preset change to call %d ", this->_heatPump.getEconomyMode());
-        
-        this->preset = climate::ClimatePreset::CLIMATE_PRESET_ECO;
-        updated = true;
-    }else if (!this->_heatPump.getEconomyMode() &&
-        this->preset == climate::ClimatePreset::CLIMATE_PRESET_ECO) {
-        ESP_LOGD(
-            "fujitsu",
-            "ECO mode turned off by controller, adding preset change to call, %d", this->_heatPump.getEconomyMode());
-        
-        this->preset = climate::ClimatePreset::CLIMATE_PRESET_NONE;
-        updated = true;
-    }
+        if (this->sharedState.economyMode &&
+            this->preset != climate::ClimatePreset::CLIMATE_PRESET_ECO) {
+            ESP_LOGD("fujitsu",
+                     "ECO mode turned on by controller, adding preset change "
+                     "to call %d ",
+                     this->sharedState.economyMode);
 
-    if (!this->_heatPump.getOnOff() && this->mode != climate::ClimateMode::CLIMATE_MODE_OFF) {
-        ESP_LOGD("fuji",
-                 "Controller turned off AC, adding mode change to call");
-        this->mode = climate::ClimateMode::CLIMATE_MODE_OFF;
-        updated = true;
+            this->preset = climate::ClimatePreset::CLIMATE_PRESET_ECO;
+            updated = true;
+        } else if (!this->sharedState.economyMode &&
+                   this->preset == climate::ClimatePreset::CLIMATE_PRESET_ECO) {
+            ESP_LOGD("fujitsu",
+                     "ECO mode turned off by controller, adding preset change "
+                     "to call, %d",
+                     this->sharedState.economyMode);
+
+            this->preset = climate::ClimatePreset::CLIMATE_PRESET_NONE;
+            updated = true;
+        }
+
+        if (!this->sharedState.onOff &&
+            this->mode != climate::ClimateMode::CLIMATE_MODE_OFF) {
+            ESP_LOGD("fuji",
+                     "Controller turned off AC, adding mode change to call");
+            this->mode = climate::ClimateMode::CLIMATE_MODE_OFF;
+            updated = true;
+        }
+        xSemaphoreGive(this->lock);
     }
 
     if (updated) {
@@ -149,72 +183,61 @@ void FujitsuClimate::updateState() {
     }
 }
 
-void FujitsuClimate::loop() {
-    if (this->_heatPump.waitForFrame()) {
-        delay(60);
-        this->_heatPump.sendPendingFrame();
-    }
-
-    if (this->current_temperature != this->_heatPump.getControllerTemp()) {
-        this->current_temperature = this->_heatPump.getControllerTemp();
-        this->publish_state();
-    }
-
-    this->updateState();
-}
+void FujitsuClimate::loop() { this->updateState(); }
 
 void FujitsuClimate::control(const climate::ClimateCall &call) {
     bool updated = false;
+    if (xSemaphoreTake(this->lock, TickType_t(1000)) == pdTRUE) {
+        if (call.get_mode().has_value()) {
+            climate::ClimateMode callMode = call.get_mode().value();
+            ESP_LOGD("fuji", "Fuji setting mode %d", callMode);
 
-    if (call.get_mode().has_value()) {
-        climate::ClimateMode callMode = call.get_mode().value();
-        ESP_LOGD("fuji", "Fuji setting mode %d", callMode);
+            auto fujiMode = this->espToFujiMode(callMode);
 
-        auto fujiMode = this->espToFujiMode(callMode);
-        if (fujiMode.has_value()) {
-            this->_heatPump.setMode(static_cast<byte>(fujiMode.value()));
-            if (callMode != climate::ClimateMode::CLIMATE_MODE_OFF) {
-                this->_heatPump.setOnOff(true);
+            if (fujiMode.has_value()) {
+                this->sharedState.acMode = static_cast<byte>(fujiMode.value());
+                if (callMode != climate::ClimateMode::CLIMATE_MODE_OFF) {
+                    this->sharedState.onOff = 1;
+                }
+                updated = true;
+            }
+
+            if (callMode == climate::ClimateMode::CLIMATE_MODE_OFF) {
+                this->sharedState.onOff = 0;
+                updated = true;
+            }
+        }
+        if (call.get_target_temperature().has_value()) {
+            auto callTargetTemp = call.get_target_temperature().value();
+            this->sharedState.controllerTemp = callTargetTemp;
+            updated = true;
+            ESP_LOGD("fuji", "Fuji setting temperature %f", callTargetTemp);
+        }
+
+        if (call.get_preset().has_value()) {
+            auto callPreset = call.get_preset().value();
+            this->sharedState.economyMode = static_cast<byte>(
+                callPreset == climate::ClimatePreset::CLIMATE_PRESET_ECO ? 1
+                                                                         : 0);
+            updated = true;
+            ESP_LOGD("fuji", "Fuji setting preset %d", callPreset);
+        }
+
+        if (call.get_fan_mode().has_value()) {
+            auto callFanMode = call.get_fan_mode().value();
+            auto fujiFanMode = this->espToFujiFanMode(callFanMode);
+            if (fujiFanMode.has_value()) {
+                this->heatPump.setFanMode(
+                    static_cast<byte>(fujiFanMode.value()));
             }
             updated = true;
+            ESP_LOGD("fuji", "Fuji setting fan mode %d", this->fan_mode);
         }
-
-        if (callMode == climate::ClimateMode::CLIMATE_MODE_OFF) {
-            this->_heatPump.setOnOff(false);
-            updated = true;
-        }
-    }
-    if (call.get_target_temperature().has_value()) {
-        auto callTargetTemperatur = call.get_target_temperature().value();
-        this->_heatPump.setTemp(callTargetTemperatur);
-        updated = true;
-        ESP_LOGD("fuji", "Fuji setting temperature %f", callTargetTemperatur);
-    }
-
-    if (call.get_preset().has_value()) {
-        auto callPreset = call.get_preset().value();
-        this->_heatPump.setEconomyMode(static_cast<byte>(callPreset == climate::ClimatePreset::CLIMATE_PRESET_ECO ? 1 : 0));
-        updated = true;
-        ESP_LOGD("fuji", "Fuji setting preset %d", callPreset);
-    }
-
-    if (call.get_fan_mode().has_value()) {
-        auto callFanMode = call.get_fan_mode().value();
-        auto fujiFanMode = this->espToFujiFanMode(callFanMode);
-        if (fujiFanMode.has_value()) {
-            this->_heatPump.setFanMode(static_cast<byte>(fujiFanMode.value()));
-        }
-        updated = true;
-        ESP_LOGD("fuji", "Fuji setting fan mode %d", this->fan_mode);
-    }
-
-    if (updated) {
-        if (this->_heatPump.waitForFrame()) {
-            delay(60);
-            ESP_LOGD("fuji", "sending pending frame after api update");
-            this->_heatPump.sendPendingFrame();
+        if (updated) {
+            this->heatPump.setState(&(this->sharedState));
         }
     }
+    xSemaphoreGive(this->lock);
 }
 
 climate::ClimateTraits FujitsuClimate::traits() {

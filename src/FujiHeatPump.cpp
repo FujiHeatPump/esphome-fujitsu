@@ -1,3 +1,4 @@
+// #define DEBUG_FUJI
 #include "FujiHeatPump.h"
 
 FujiFrame FujiHeatPump::decodeFrame() {
@@ -120,9 +121,10 @@ void FujiHeatPump::connect(HardwareSerial *serial, bool secondary,
 }
 
 void FujiHeatPump::printFrame(byte buf[8], FujiFrame ff) {
-    Serial.printf("%X %X %X %X %X %X %X %X  ", buf[0], buf[1], buf[2], buf[3],
-                  buf[4], buf[5], buf[6], buf[7]);
-    Serial.printf(
+    ESP_LOGD("fuji", "%X %X %X %X %X %X %X %X  ", buf[0], buf[1], buf[2],
+             buf[3], buf[4], buf[5], buf[6], buf[7]);
+    ESP_LOGD(
+        "fuji",
         " mSrc: %d mDst: %d mType: %d write: %d login: %d unknown: %d onOff: "
         "%d temp: %d, mode: %d cP:%d uM:%d cTemp:%d acError:%d \n",
         ff.messageSource, ff.messageDest, ff.messageType, ff.writeBit,
@@ -161,10 +163,10 @@ bool FujiHeatPump::waitForFrame() {
 
         ff = decodeFrame();
 
-        if (debugPrint) {
-            Serial.printf("<-- ");
-            printFrame(readBuf, ff);
-        }
+#ifdef DEBUG_FUJI
+        ESP_LOGD("fuji", "<-- ");
+        printFrame(readBuf, ff);
+#endif
 
         if (ff.messageDest == controllerAddress) {
             lastFrameReceived = millis();
@@ -279,7 +281,7 @@ bool FujiHeatPump::waitForFrame() {
                 ff.acError = currentState.acError;
             } else if (ff.messageType ==
                        static_cast<byte>(FujiMessageType::ERROR)) {
-                Serial.printf("AC ERROR RECV: ");
+                ESP_LOGD("fuji", "AC ERROR RECV: ");
                 printFrame(readBuf, ff);
                 // handle errors here
                 return false;
@@ -287,10 +289,10 @@ bool FujiHeatPump::waitForFrame() {
 
             encodeFrame(ff);
 
-            if (debugPrint) {
-                Serial.printf("--> ");
-                printFrame(writeBuf, ff);
-            }
+#ifdef DEBUG_FUJI
+            ESP_LOGD("fuji", "--> ");
+            printFrame(writeBuf, ff);
+#endif
 
             for (int i = 0; i < 8; i++) {
                 writeBuf[i] ^= 0xFF;
@@ -366,5 +368,36 @@ byte FujiHeatPump::getControllerTemp() { return currentState.controllerTemp; }
 FujiFrame *FujiHeatPump::getCurrentState() { return &currentState; }
 
 FujiFrame *FujiHeatPump::getUpdateState() { return &updateState; }
+
+void FujiHeatPump::setState(FujiFrame *state) {
+    FujiFrame *current = this->getCurrentState();
+    if (state->onOff != this->getOnOff()) {
+        this->setOnOff(state->onOff);
+    }
+
+    if (state->temperature != this->getTemp()) {
+        this->setTemp(state->temperature);
+    }
+
+    if (state->acMode != this->getMode()) {
+        this->setMode(state->acMode);
+    }
+
+    if (state->fanMode != this->getFanMode()) {
+        this->setFanMode(state->fanMode);
+    }
+
+    if (state->economyMode != this->getEconomyMode()) {
+        this->setEconomyMode(state->economyMode);
+    }
+
+    if (state->swingMode != this->getSwingMode()) {
+        this->setSwingMode(state->swingMode);
+    }
+
+    if (state->swingStep != this->getSwingStep()) {
+        this->setSwingStep(state->swingStep);
+    }
+}
 
 byte FujiHeatPump::getUpdateFields() { return updateFields; }
