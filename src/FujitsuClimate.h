@@ -15,6 +15,7 @@ class FujitsuClimate : public climate::Climate, public Component {
     FujiHeatPump heatPump;
     FujiFrame sharedState;
     SemaphoreHandle_t lock;
+    bool pendingUpdate;
 
    protected:
 

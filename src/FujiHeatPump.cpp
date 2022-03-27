@@ -371,31 +371,31 @@ FujiFrame *FujiHeatPump::getUpdateState() { return &updateState; }
 
 void FujiHeatPump::setState(FujiFrame *state) {
     FujiFrame *current = this->getCurrentState();
-    if (state->onOff != this->getOnOff()) {
+    if (state->onOff != current->onOff) {
         this->setOnOff(state->onOff);
     }
 
-    if (state->temperature != this->getTemp()) {
+    if (state->temperature != current->temperature) {
         this->setTemp(state->temperature);
     }
 
-    if (state->acMode != this->getMode()) {
+    if (state->acMode != current->acMode) {
         this->setMode(state->acMode);
     }
 
-    if (state->fanMode != this->getFanMode()) {
+    if (state->fanMode != current->fanMode) {
         this->setFanMode(state->fanMode);
     }
 
-    if (state->economyMode != this->getEconomyMode()) {
+    if (state->economyMode != current->economyMode) {
         this->setEconomyMode(state->economyMode);
     }
 
-    if (state->swingMode != this->getSwingMode()) {
+    if (state->swingMode != current->swingMode) {
         this->setSwingMode(state->swingMode);
     }
 
-    if (state->swingStep != this->getSwingStep()) {
+    if (state->swingStep != current->swingStep) {
         this->setSwingStep(state->swingStep);
     }
 }

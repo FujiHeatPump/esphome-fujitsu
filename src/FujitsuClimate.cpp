@@ -7,12 +7,14 @@ namespace fujitsu {
 
 void serialTask(void *pvParameters) {
     FujitsuClimate *climate = (FujitsuClimate *)pvParameters;
+    ESP_LOGD("fuji", "reached task");
     ESP_LOGD("fuji", "serialTask started on core %d", xPortGetCoreID());
 
     for (;;) {
         if (climate->heatPump.waitForFrame()) {
             delay(60);
             climate->heatPump.sendPendingFrame();
+            climate->pendingUpdate = false;
         }
         if (xSemaphoreTake(climate->lock, (TickType_t)200) == pdTRUE) {
             memcpy(&(climate->sharedState), climate->heatPump.getCurrentState(),
@@ -25,11 +27,14 @@ void serialTask(void *pvParameters) {
 void FujitsuClimate::setup() {
     ESP_LOGD("fuji", "Fuji initialized");
     this->lock = xSemaphoreCreateBinary();
+    xSemaphoreGive(this->lock);
+    this->pendingUpdate = false;
     memcpy(&(this->sharedState), this->heatPump.getCurrentState(),
            sizeof(FujiFrame));
     this->heatPump.connect(&Serial2, true);
-    xTaskCreatePinnedToCore(serialTask, "FujiTask", 10000, (void *)this, configMAX_PRIORITIES - 1,
-                            &(this->taskHandle), 1);
+    ESP_LOGD("fuji", "starting task");
+    xTaskCreatePinnedToCore(serialTask, "FujiTask", 10000, (void *)this,
+                            configMAX_PRIORITIES - 1, &(this->taskHandle), 1);
 }
 
 optional<climate::ClimateMode> FujitsuClimate::fujiToEspMode(
@@ -114,21 +119,26 @@ optional<FujiFanMode> FujitsuClimate::espToFujiFanMode(
 }
 
 void FujitsuClimate::updateState() {
+    if (this->pendingUpdate) {  // wait till update is sent
+        return;
+    }
     bool updated = false;
     if (xSemaphoreTake(this->lock, TickType_t(200)) == pdTRUE) {
-        if (this->current_temperature != this->sharedState.temperature) {
-            this->current_temperature = this->sharedState.temperature;
+        // Room temp
+        if (this->current_temperature != this->sharedState.controllerTemp) {
+            this->current_temperature = this->sharedState.controllerTemp;
             updated = true;
         }
 
-        if (this->sharedState.controllerTemp != this->target_temperature) {
+        // Target temp
+        if (this->sharedState.temperature != this->target_temperature) {
             ESP_LOGD("fuji", "ctrl temp %d vs my temp %d",
-                     this->sharedState.controllerTemp,
-                     this->target_temperature);
-            this->target_temperature = this->sharedState.controllerTemp;
+                     this->sharedState.temperature, this->target_temperature);
+            this->target_temperature = this->sharedState.temperature;
             updated = true;
         }
 
+        // Mode
         auto newMode = fujiToEspMode((FujiMode)this->sharedState.acMode);
         if (newMode.has_value() && this->sharedState.onOff &&
             newMode.value() != this->mode) {
@@ -138,6 +148,7 @@ void FujitsuClimate::updateState() {
             updated = true;
         }
 
+        // Fan speed
         auto newFanMode =
             fujiToEspFanMode((FujiFanMode)this->sharedState.fanMode);
         if (newFanMode.has_value() && newFanMode.value() != this->fan_mode) {
@@ -186,8 +197,8 @@ void FujitsuClimate::updateState() {
 void FujitsuClimate::loop() { this->updateState(); }
 
 void FujitsuClimate::control(const climate::ClimateCall &call) {
-    bool updated = false;
-    if (xSemaphoreTake(this->lock, TickType_t(1000)) == pdTRUE) {
+    if (xSemaphoreTake(this->lock, 1000) == pdTRUE) {
+        bool updated = false;
         if (call.get_mode().has_value()) {
             climate::ClimateMode callMode = call.get_mode().value();
             ESP_LOGD("fuji", "Fuji setting mode %d", callMode);
@@ -209,7 +220,7 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
         }
         if (call.get_target_temperature().has_value()) {
             auto callTargetTemp = call.get_target_temperature().value();
-            this->sharedState.controllerTemp = callTargetTemp;
+            this->sharedState.temperature = callTargetTemp;
             updated = true;
             ESP_LOGD("fuji", "Fuji setting temperature %f", callTargetTemp);
         }
@@ -235,9 +246,10 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
         }
         if (updated) {
             this->heatPump.setState(&(this->sharedState));
+            this->pendingUpdate = true;
         }
+        xSemaphoreGive(this->lock);
     }
-    xSemaphoreGive(this->lock);
 }
 
 climate::ClimateTraits FujitsuClimate::traits() {
