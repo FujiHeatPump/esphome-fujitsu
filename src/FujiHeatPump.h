@@ -1,3 +1,4 @@
+/* This file is based on unreality's FujiHeatPump project */
 #pragma once
 #include <Arduino.h>
 #include <HardwareSerial.h>

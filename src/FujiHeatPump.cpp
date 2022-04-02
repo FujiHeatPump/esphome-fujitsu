@@ -1,3 +1,5 @@
+/* This file is based on unreality's FujiHeatPump project */
+
 // #define DEBUG_FUJI
 #include "FujiHeatPump.h"
 
