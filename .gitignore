@@ -4,3 +4,5 @@
 .vscode/launch.json
 .vscode/ipch
 main.cpp
+src/esphome/
+src/esphome.h
