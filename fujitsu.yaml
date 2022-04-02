@@ -1,0 +1,44 @@
+esphome:
+  name: fujitsu
+  platform: ESP32
+  board: nodemcu-32s
+  includes:
+    - FujitsuClimate.h
+    - FujitsuClimate.cpp
+    - FujiHeatPump.h
+    - FujiHeatPump.cpp
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  password: ""
+
+web_server:
+  port: 80
+
+ota:
+  password: ""
+
+wifi:
+  ssid: "your wifi ssid"
+  password: "your wifi password"
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Fujitsu"
+    password: "a password for cative portal"
+
+
+captive_portal:
+
+climate:
+- platform: custom
+  lambda: |-
+    auto fujitsuClimate = new fujitsu::FujitsuClimate();
+    App.register_component(fujitsuClimate);
+    return {fujitsuClimate};
+
+  climates:
+    - name: "Fujitsu"

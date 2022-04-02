@@ -11,9 +11,14 @@ class FujitsuClimate : public climate::Climate, public Component {
     void loop() override;
     void control(const climate::ClimateCall &call) override;
     climate::ClimateTraits traits() override;
+    TaskHandle_t taskHandle;
+    FujiHeatPump heatPump;
+    FujiFrame sharedState;
+    SemaphoreHandle_t lock;
+    bool pendingUpdate;
 
    protected:
-    FujiHeatPump _heatPump;
+
     void updateState();
     optional<climate::ClimateMode> fujiToEspMode(FujiMode fujiMode);
     optional<FujiMode> espToFujiMode(climate::ClimateMode espMode);
