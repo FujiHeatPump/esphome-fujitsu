@@ -1,4 +1,5 @@
 # Intro
+This project uses Fujitsu's proprietary protocol to control a Fujitsu AC(heat pump) unit, interfacing with Home Assistant through ESPHome.
 
 This project is entirely based on unreality [FujiHeatPump](https://github.com/unreality/FujiHeatPump) project.
 Huge thanks to [unreality](https://github.com/unreality/) and [jaroslawprzybylowicz](https://github.com/jaroslawprzybylowicz/fuji-iot)!
