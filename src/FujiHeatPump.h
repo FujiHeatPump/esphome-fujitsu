@@ -1,7 +1,8 @@
 /* This file is based on unreality's FujiHeatPump project */
 #pragma once
-#include <Arduino.h>
-#include <HardwareSerial.h>
+
+#include "esphome.h"
+#include "HardwareSerial.h"
 
 const byte kModeIndex = 3;
 const byte kModeMask = 0b00001110;
