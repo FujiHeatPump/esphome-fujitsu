@@ -13,15 +13,6 @@ IMPORTANT: I connected the MCP2025 TX RX to the ESP32's Serial 2 line, I used th
 ## ESPHome:
 
 
-Copy all files under src into ESPHome config folder, next to the yaml file.
-```text
-- config_folder
-|- fujitsu.yaml
-|- FujiHeatPump.cpp
-|- FujiHeatPump.h
-|- FujitsuClimate.cpp
-|- FujitsuClimate.h
-```
 See fujitsu.yaml for a sample config file.
 Then run your esphome (tested with esphome version 2022.2.3) compile or upload command:
 ```bash
@@ -41,7 +32,6 @@ modify the function to suit your unit.
 * Setting ECO mode from Home Assistant does not work, but receiving ECO mode change from the controller is fine
 
 ## Planned work:
-* Make traits configurable through the yaml config file
 * Get this project merged into the main ESPHome repository
 
 ## How to contirbute:
