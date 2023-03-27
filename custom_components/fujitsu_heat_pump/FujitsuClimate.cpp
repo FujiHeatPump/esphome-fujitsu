@@ -5,6 +5,8 @@
 namespace esphome {
 namespace fujitsu {
 
+static const char *const TAG = "fujitsu_climate.component";
+
 void serialTask(void *pvParameters) {
     FujitsuClimate *climate = (FujitsuClimate *)pvParameters;
     ESP_LOGD("fuji", "reached task");
@@ -31,7 +33,10 @@ void FujitsuClimate::setup() {
     this->pendingUpdate = false;
     memcpy(&(this->sharedState), this->heatPump.getCurrentState(),
            sizeof(FujiFrame));
-    this->heatPump.connect(&Serial2, true);
+    // c.f. https://github.com/esphome/esphome/blob/acd55b960120265a0a4ce0bd06d08758dce5bbbd/esphome/components/uart/uart_component_esp32_arduino.cpp#L95
+    int8_t tx = this->tx_pin_ != nullptr ? this->tx_pin_->get_pin() : -1;
+    int8_t rx = this->rx_pin_ != nullptr ? this->rx_pin_->get_pin() : -1;
+    this->heatPump.connect(&Serial2, !this->is_master_, rx, tx);
     ESP_LOGD("fuji", "starting task");
     xTaskCreatePinnedToCore(serialTask, "FujiTask", 10000, (void *)this,
                             configMAX_PRIORITIES - 1, &(this->taskHandle), 1);
@@ -124,8 +129,12 @@ void FujitsuClimate::updateState() {
     }
     bool updated = false;
     if (xSemaphoreTake(this->lock, TickType_t(200)) == pdTRUE) {
-        // Room temp
-        if (this->current_temperature != this->sharedState.controllerTemp) {
+        // Room temp, first checking if we should use a remote temp sensor
+        if (this->remote_temperature_ != nullptr && this->remote_temperature_->has_state()) {
+            // TODO this probably isn't implemented correctly
+            this->current_temperature = this->remote_temperature_->state;
+            updated = true;
+        } else if (this->current_temperature != this->sharedState.controllerTemp) {
             this->current_temperature = this->sharedState.controllerTemp;
             updated = true;
         }
@@ -279,5 +288,21 @@ climate::ClimateTraits FujitsuClimate::traits() {
 
     return traits;
 }
+
+void FujitsuClimate::dump_config() {
+    ESP_LOGCONFIG(TAG, "Fujitsu Climate Heat Pump:");
+    ESP_LOGCONFIG(TAG, "  Using uart #2");
+    if (this->is_master_) {
+        ESP_LOGCONFIG(TAG, "  Running as master");
+    } else {
+        ESP_LOGCONFIG(TAG, "  Running as secondary");
+    }
+    LOG_PIN("  TX Pin:", this->tx_pin_);
+    LOG_PIN("  RX Pin:", this->rx_pin_);
+    //if (this->remote_temperature_ != nullptr) {
+    //    LOG_SENSOR("  ", "Remote Temp Sensor", this->remote_temperature_);
+    //}
+}
+
 }  // namespace fujitsu
 }  // namespace esphome
