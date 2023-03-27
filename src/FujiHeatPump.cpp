@@ -165,9 +165,6 @@ void heat_pump_uart_event_task(void *pvParameters) {
                             if (!xSemaphoreGive(heatpump->updateStateMutex)) {
                                 ESP_LOGW(TAG, "Failed to give update state mutex");
                             }
-                            // TODO I think we should be using RS485_HALF_DUPLEX mode instead: https://github.com/espressif/esp-idf/blob/81e1e6599553a646a689ad51e32a5d48b34cfec5/examples/peripherals/uart/uart_echo_rs485/main/rs485_example.c
-                            // read back our own frame so we dont process it again
-                            uart_read_bytes(heatpump->uart_port, heatpump->writeBuf, 8, portMAX_DELAY);
                         }
                     }
                     break;
@@ -240,6 +237,12 @@ void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int
     rc = uart_set_pin(uart_port, txPin /* TXD */,  rxPin /* RXD */, UART_PIN_NO_CHANGE /* RTS */, UART_PIN_NO_CHANGE /* CTS */);
     if (rc != 0) {
         ESP_LOGW(TAG, "Failed to set uart pins");
+        return;
+    }
+
+    rc = uart_set_mode(uart_port, UART_MODE_RS485_HALF_DUPLEX);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "Failed to set uart to half duplex");
         return;
     }
 
