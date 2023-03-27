@@ -2,7 +2,15 @@
 #pragma once
 
 #include "esphome.h"
+#ifdef USE_ESP_IDF
+#include "driver/uart.h"
+#else
 #include "HardwareSerial.h"
+#endif
+
+#ifdef USE_ESP_IDF
+typedef uint8_t byte;
+#endif
 
 const byte kModeIndex = 3;
 const byte kModeMask = 0b00001110;
@@ -72,7 +80,9 @@ typedef struct FujiFrames {
 
 class FujiHeatPump {
    private:
+#ifdef USE_ARDUINO
     HardwareSerial *_serial;
+#endif
     byte readBuf[8];
     byte writeBuf[8];
 
@@ -80,24 +90,48 @@ class FujiHeatPump {
     bool controllerIsPrimary = true;
     bool seenSecondaryController = false;
     bool controllerLoggedIn = false;
+#ifdef USE_ARDUINO
+    bool pendingFrame = false;
     unsigned long lastFrameReceived;
+#else
+    TickType_t lastFrameReceived;
+#endif
 
+    // This updateState and updateFields are protected by updateStateMutex in esp-idf
     byte updateFields;
     FujiFrame updateState;
+
     FujiFrame currentState;
 
     FujiFrame decodeFrame();
     void encodeFrame(FujiFrame ff);
     void printFrame(byte buf[8], FujiFrame ff);
 
-    bool pendingFrame = false;
+#ifdef USE_ESP_IDF
+    QueueHandle_t uart_queue;
+    uart_port_t uart_port;
+    // This protects all accesses of updateState and updateFields
+    SemaphoreHandle_t updateStateMutex;
+    // This publishes state updates to the climate component
+#endif
 
    public:
+    friend void heat_pump_uart_event_task(void *);
+#ifdef USE_ARDUINO
     void connect(HardwareSerial *serial, bool secondary);
     void connect(HardwareSerial *serial, bool secondary, int rxPin, int txPin);
+#else
+    void connect(uart_port_t uart_port, bool secondary,
+                           int rxPin = UART_PIN_NO_CHANGE, int txPin = UART_PIN_NO_CHANGE);
+    // This publishes state updates to the climate component
+    QueueHandle_t state_dropbox;
+#endif
 
+#ifdef USE_ARDUINO
     bool waitForFrame();
     void sendPendingFrame();
+#endif
+    bool processReceivedFrame(bool& pendingFrame);
     bool isBound();
     bool updatePending();
 
@@ -120,7 +154,8 @@ class FujiHeatPump {
     byte getControllerTemp();
 
     FujiFrame *getCurrentState();
-    FujiFrame *getUpdateState();
+    // Removed b/c it's not mutex safe
+    //FujiFrame *getUpdateState();
     
     byte getUpdateFields();
 

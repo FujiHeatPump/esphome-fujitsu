@@ -5,6 +5,7 @@
 namespace esphome {
 namespace fujitsu {
 
+#ifdef USE_ARDUINO
 void serialTask(void *pvParameters) {
     FujitsuClimate *climate = (FujitsuClimate *)pvParameters;
     ESP_LOGD("fuji", "reached task");
@@ -23,18 +24,25 @@ void serialTask(void *pvParameters) {
         }
     }
 }
+#endif
 
 void FujitsuClimate::setup() {
     ESP_LOGD("fuji", "Fuji initialized");
+#ifdef USE_ARDUINO
     this->lock = xSemaphoreCreateBinary();
     xSemaphoreGive(this->lock);
     this->pendingUpdate = false;
+#endif
     memcpy(&(this->sharedState), this->heatPump.getCurrentState(),
            sizeof(FujiFrame));
+#ifdef USE_ARDUINO
     this->heatPump.connect(&Serial2, true);
     ESP_LOGD("fuji", "starting task");
     xTaskCreatePinnedToCore(serialTask, "FujiTask", 10000, (void *)this,
                             configMAX_PRIORITIES - 1, &(this->taskHandle), 1);
+#else
+    this->heatPump.connect(UART_NUM_2, true);
+#endif
 }
 
 optional<climate::ClimateMode> FujitsuClimate::fujiToEspMode(
@@ -119,11 +127,15 @@ optional<FujiFanMode> FujitsuClimate::espToFujiFanMode(
 }
 
 void FujitsuClimate::updateState() {
-    if (this->pendingUpdate) {  // wait till update is sent
+#ifdef USE_ARDUINO
+    if (this->pendingUpdate) {  // wait till update is sent TODO why? this doesn't make sense to DG
         return;
     }
+#endif
     bool updated = false;
+#ifdef USE_ARDUINO
     if (xSemaphoreTake(this->lock, TickType_t(200)) == pdTRUE) {
+#endif
         // Room temp
         if (this->current_temperature != this->sharedState.controllerTemp) {
             this->current_temperature = this->sharedState.controllerTemp;
@@ -132,7 +144,7 @@ void FujitsuClimate::updateState() {
 
         // Target temp
         if (this->sharedState.temperature != this->target_temperature) {
-            ESP_LOGD("fuji", "ctrl temp %d vs my temp %d",
+            ESP_LOGD("fuji", "ctrl temp %d vs my temp %f",
                      this->sharedState.temperature, this->target_temperature);
             this->target_temperature = this->sharedState.temperature;
             updated = true;
@@ -185,8 +197,10 @@ void FujitsuClimate::updateState() {
             this->mode = climate::ClimateMode::CLIMATE_MODE_OFF;
             updated = true;
         }
+#ifdef USE_ARDUINO
         xSemaphoreGive(this->lock);
     }
+#endif
 
     if (updated) {
         ESP_LOGD("fuji", "publishing state");
@@ -194,10 +208,18 @@ void FujitsuClimate::updateState() {
     }
 }
 
-void FujitsuClimate::loop() { this->updateState(); }
+void FujitsuClimate::loop() {
+#ifdef USE_ESP_IDF
+    // Atomically recieve the state when it changes
+    xQueueReceive(this->heatPump.state_dropbox, &this->sharedState, pdMS_TO_TICKS(100));
+#endif
+    this->updateState();
+}
 
 void FujitsuClimate::control(const climate::ClimateCall &call) {
+#ifdef USE_ARDUINO
     if (xSemaphoreTake(this->lock, 1000) == pdTRUE) {
+#endif
         bool updated = false;
         if (call.get_mode().has_value()) {
             climate::ClimateMode callMode = call.get_mode().value();
@@ -238,18 +260,21 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
             auto callFanMode = call.get_fan_mode().value();
             auto fujiFanMode = this->espToFujiFanMode(callFanMode);
             if (fujiFanMode.has_value()) {
-                this->heatPump.setFanMode(
-                    static_cast<byte>(fujiFanMode.value()));
+                this->sharedState.fanMode = static_cast<byte>(fujiFanMode.value());
             }
             updated = true;
-            ESP_LOGD("fuji", "Fuji setting fan mode %d", this->fan_mode);
+            ESP_LOGD("fuji", "Fuji setting fan mode %d", this->fan_mode.value_or(-1));
         }
         if (updated) {
             this->heatPump.setState(&(this->sharedState));
+#ifdef USE_ARDUINO
             this->pendingUpdate = true;
+#endif
         }
+#ifdef USE_ARDUINO
         xSemaphoreGive(this->lock);
     }
+#endif
 }
 
 climate::ClimateTraits FujitsuClimate::traits() {

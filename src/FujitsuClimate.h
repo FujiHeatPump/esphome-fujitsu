@@ -11,11 +11,15 @@ class FujitsuClimate : public climate::Climate, public Component {
     void loop() override;
     void control(const climate::ClimateCall &call) override;
     climate::ClimateTraits traits() override;
+#ifdef USE_ARDUINO
     TaskHandle_t taskHandle;
+#endif
     FujiHeatPump heatPump;
     FujiFrame sharedState;
+#ifdef USE_ARDUINO
     SemaphoreHandle_t lock;
     bool pendingUpdate;
+#endif
 
    protected:
 
