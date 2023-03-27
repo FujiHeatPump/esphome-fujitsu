@@ -30,11 +30,7 @@ captive_portal:
 
 # Add the dependency to pull in the fujitsu heat pump component
 external_components:
-  - source:
-      type: git
-      url: https://github.com/FujiHeatPump/esphome-fujitsu
-      ref: proper-component
-    components: [ fujitsu_heat_pump ]
+  - source: github://FujiHeatPump/esphome-fujitsu@proper-component
 
 
 climate:
