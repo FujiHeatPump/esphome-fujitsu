@@ -1,16 +1,10 @@
 esphome:
   name: fujitsu
-  includes:
-    - FujitsuClimate.h
-    - FujitsuClimate.cpp
-    - FujiHeatPump.h
-    - FujiHeatPump.cpp
 
 esp32:
   board: nodemcu-32s
   framework:
-    type: esp-idf
-    version: recommended
+    type: arduino
 
 # Enable logging
 logger:
@@ -33,12 +27,23 @@ wifi:
 
 
 
-climate:
-- platform: custom
-  lambda: |-
-    auto fujitsuClimate = new fujitsu::FujitsuClimate();
-    App.register_component(fujitsuClimate);
-    return {fujitsuClimate};
+# Add the dependency to pull in the fujitsu heat pump component
+external_components:
+  - source: github://FujiHeatPump/esphome-fujitsu@proper-component
 
-  climates:
-    - name: "Fujitsu"
+
+climate:
+- platform: fujitsu_heat_pump
+  name: My Fujitsu Heat Pump
+  # The rest of these options are optional
+  tx_pin: 2
+  rx_pin: 3
+  remote_temperature_id: some_temp_sensor # TODO see FujitsuClimate.cpp to correct the implementation
+  master: false
+
+# Pull a sensor in from homeassistant
+sensor:
+  - platform: homeassistant
+    entity_id: sensor.zigbee_sensor
+    id: some_temp_sensor
+

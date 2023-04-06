@@ -1,8 +1,13 @@
 /* This file is based on unreality's FujiHeatPump project */
 #pragma once
 
-#include "esphome.h"
+#include "esphome/core/component.h"
+#include "esphome/core/hal.h"
+#include "esphome/core/defines.h"
+
 #include "HardwareSerial.h"
+
+typedef uint8_t byte;
 
 const byte kModeIndex = 3;
 const byte kModeMask = 0b00001110;
