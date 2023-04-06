@@ -99,37 +99,6 @@ void FujiHeatPump::encodeFrame(FujiFrame ff) {
         (ff.controllerTemp << kControllerTempOffset);
 }
 
-#ifdef USE_ARDUINO
-void FujiHeatPump::connect(HardwareSerial *serial, bool secondary) {
-    return this->connect(serial, secondary, -1, -1);
-}
-
-void FujiHeatPump::connect(HardwareSerial *serial, bool secondary,
-                           int rxPin = -1, int txPin = -1) {
-    _serial = serial;
-    if (rxPin != -1 && txPin != -1) {
-#ifdef ESP32
-        _serial->begin(500, SERIAL_8E1, rxPin, txPin);
-#else
-        Serial.print("Setting RX/TX pin unsupported, using defaults.\n");
-        _serial->begin(500, SERIAL_8E1);
-#endif
-    } else {
-        _serial->begin(500, SERIAL_8E1);
-    }
-    _serial->setTimeout(200);
-
-    if (secondary) {
-        controllerIsPrimary = false;
-        controllerAddress = static_cast<byte>(FujiAddress::SECONDARY);
-    } else {
-        controllerIsPrimary = true;
-        controllerAddress = static_cast<byte>(FujiAddress::PRIMARY);
-    }
-
-    lastFrameReceived = 0;
-}
-#else
 void heat_pump_uart_event_task(void *pvParameters) {
     FujiHeatPump *heatpump = (FujiHeatPump *)pvParameters;
     uart_event_t event;
@@ -265,7 +234,6 @@ void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int
         return;
     }
 }
-#endif
 
 void FujiHeatPump::printFrame(byte buf[8], FujiFrame ff) {
     ESP_LOGD("fuji", "%X %X %X %X %X %X %X %X  ", buf[0], buf[1], buf[2],
@@ -278,36 +246,6 @@ void FujiHeatPump::printFrame(byte buf[8], FujiFrame ff) {
         ff.loginBit, ff.unknownBit, ff.onOff, ff.temperature, ff.acMode,
         ff.controllerPresent, ff.updateMagic, ff.controllerTemp, ff.acError);
 }
-
-#ifdef USE_ARDUINO
-void FujiHeatPump::sendPendingFrame() {
-    if (pendingFrame && (millis() - lastFrameReceived) > 50) {
-        _serial->write(writeBuf, 8);
-        _serial->flush();
-        pendingFrame = false;
-        updateFields = 0;
-
-        _serial->readBytes(
-            writeBuf,
-            8);  // read back our own frame so we dont process it again
-    }
-}
-
-bool FujiHeatPump::waitForFrame() {
-    if (_serial->available()) {
-        memset(readBuf, 0, 8);
-        int bytesRead = _serial->readBytes(readBuf, 8);
-
-        if (bytesRead < 8) {
-            // skip incomplete frame
-            return false;
-        }
-
-        return processReceivedFrame(pendingFrame);
-    }
-    return false;
-}
-#endif
 
 bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
     FujiFrame ff;
@@ -324,11 +262,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
 #endif
 
     if (ff.messageDest == controllerAddress) {
-#ifdef USE_ARDUINO
-        lastFrameReceived = millis();
-#else
         lastFrameReceived = xTaskGetTickCount();
-#endif
 
         if (ff.messageType == static_cast<byte>(FujiMessageType::STATUS)) {
             if (ff.controllerPresent == 1) {
@@ -389,11 +323,9 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             }
 
             // if we have any updates, set the flags
-#ifdef USE_ESP_IDF
             if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
                 ESP_LOGW(TAG, "Failed to take update state mutex");
             }
-#endif
 
             if (updateFields) {
                 ff.writeBit = 1;
@@ -429,11 +361,9 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
                 ff.swingStep = updateState.swingStep;
             }
 
-#ifdef USE_ESP_IDF
             if (!xSemaphoreGive(updateStateMutex)) {
                 ESP_LOGW(TAG, "Failed to give update state mutex");
             }
-#endif
 
             memcpy(&currentState, &ff, sizeof(FujiFrame));
         } else if (ff.messageType ==
@@ -488,11 +418,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
 }
 
 bool FujiHeatPump::isBound() {
-#ifdef USE_ARDUINO
-    if (millis() - lastFrameReceived < 1000)
-#else
     if (xTaskGetTickCount() - lastFrameReceived < pdMS_TO_TICKS(1000))
-#endif
     {
         return true;
     }
@@ -507,102 +433,74 @@ bool FujiHeatPump::updatePending() {
 }
 
 void FujiHeatPump::setOnOff(bool o) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kOnOffUpdateMask;
     updateState.onOff = o ? 1 : 0;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 void FujiHeatPump::setTemp(byte t) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kTempUpdateMask;
     updateState.temperature = t;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 void FujiHeatPump::setMode(byte m) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kModeUpdateMask;
     updateState.acMode = m;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 void FujiHeatPump::setFanMode(byte fm) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kFanModeUpdateMask;
     updateState.fanMode = fm;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 void FujiHeatPump::setEconomyMode(byte em) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kEconomyModeUpdateMask;
     updateState.economyMode = em;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 void FujiHeatPump::setSwingMode(byte sm) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kSwingModeUpdateMask;
     updateState.swingMode = sm;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 void FujiHeatPump::setSwingStep(byte ss) {
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     updateFields |= kSwingStepUpdateMask;
     updateState.swingStep = ss;
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 
 bool FujiHeatPump::getOnOff() { return currentState.onOff == 1 ? true : false; }
@@ -618,11 +516,9 @@ FujiFrame *FujiHeatPump::getCurrentState() { return &currentState; }
 
 void FujiHeatPump::setState(FujiFrame *state) {
     FujiFrame *current = this->getCurrentState();
-#ifdef USE_ESP_IDF
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
-#endif
     if (state->onOff != current->onOff) {
         this->setOnOff(state->onOff);
     }
@@ -650,11 +546,9 @@ void FujiHeatPump::setState(FujiFrame *state) {
     if (state->swingStep != current->swingStep) {
         this->setSwingStep(state->swingStep);
     }
-#ifdef USE_ESP_IDF
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
-#endif
 }
 
 byte FujiHeatPump::getUpdateFields() { return updateFields; }
