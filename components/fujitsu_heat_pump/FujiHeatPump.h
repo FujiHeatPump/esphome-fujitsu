@@ -71,6 +71,7 @@ typedef struct FujiFrames {
 
     bool writeBit = false;
     bool loginBit = false;
+    bool errorBit = false;
     bool unknownBit = false;  // unsure what this bit indicates
 
     byte messageType = 0;

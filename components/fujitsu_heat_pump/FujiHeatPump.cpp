@@ -1,8 +1,8 @@
 /* This file is based on unreality's FujiHeatPump project */
 
-// #define DEBUG_FUJI
+#define DEBUG_FUJI
 #include "FujiHeatPump.h"
-#include "esp_log.h"
+#include "esphome/core/log.h"
 #include "string.h"
 
 namespace esphome {
@@ -120,8 +120,13 @@ void heat_pump_uart_event_task(void *pvParameters) {
                     } else {
                         ESP_LOGD(TAG, "Got heat pump update frame");
                         heatpump->processReceivedFrame(pendingFrame);
-                        ESP_LOGD(TAG, "Processed heat pump update frame");
+                        if (!xSemaphoreTake(heatpump->updateStateMutex, portMAX_DELAY)) {
+                            ESP_LOGW(TAG, "Failed to take update state mutex");
+                        }
                         xQueueOverwrite(heatpump->state_dropbox, &heatpump->currentState);
+                        if (!xSemaphoreGive(heatpump->updateStateMutex)) {
+                            ESP_LOGW(TAG, "Failed to give update state mutex");
+                        }
                         if (pendingFrame) {
                             ESP_LOGD(TAG, "Now, handling a pending frame txmit");
                             // This causes us to wait until 60 ms have passed since we read wakeTime, so that we account for the processReceivedFrame(). It also allows other tasks to use the core in the meantime because it suspends instead of busy-waiting.
@@ -174,7 +179,7 @@ void heat_pump_uart_event_task(void *pvParameters) {
                     break;
             }
         }
-        ESP_LOGI(TAG, "uart task heartbeat");
+        //ESP_LOGI(TAG, "uart task heartbeat");
     }
 }
 
@@ -236,7 +241,7 @@ void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int
     //                        configMAX_PRIORITIES - 1, NULL /* ignore the task handle */, 1);
     rc = xTaskCreate(heat_pump_uart_event_task, "FujiTask", 4096, (void *)this,
                             12, NULL /* ignore the task handle */);
-    if (rc != 0) {
+    if (rc != pdPASS) {
         ESP_LOGW(TAG, "Failed to create heat pump event task");
         return;
     }
@@ -296,12 +301,13 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
                 if (controllerIsPrimary) {
                     // if this is the first message we have received,
                     // announce ourselves to the indoor unit
+                    memset(&ff, 0, sizeof(FujiFrame));
                     ff.messageSource = controllerAddress;
                     ff.messageDest = static_cast<byte>(FujiAddress::UNIT);
-                    ff.loginBit = false;
+                    ff.loginBit = true;
                     ff.controllerPresent = 0;
                     ff.updateMagic = 0;
-                    ff.unknownBit = true;
+                    ff.unknownBit = false;
                     ff.writeBit = 0;
                     ff.messageType =
                         static_cast<byte>(FujiMessageType::LOGIN);
@@ -336,6 +342,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
 
             if (updateFields) {
                 ff.writeBit = 1;
+                ESP_LOGD(TAG, "We have fields to update");
             }
 
             if (updateFields & kOnOffUpdateMask) {
@@ -368,11 +375,11 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
                 ff.swingStep = updateState.swingStep;
             }
 
+            memcpy(&currentState, &ff, sizeof(FujiFrame));
+
             if (!xSemaphoreGive(updateStateMutex)) {
                 ESP_LOGW(TAG, "Failed to give update state mutex");
             }
-
-            memcpy(&currentState, &ff, sizeof(FujiFrame));
         } else if (ff.messageType ==
                    static_cast<byte>(FujiMessageType::LOGIN)) {
             // received a login frame OK frame
@@ -386,6 +393,10 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             ff.unknownBit = true;
             ff.writeBit = 0;
 
+            if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
+                ESP_LOGW(TAG, "Failed to take update state mutex");
+            }
+
             ff.onOff = currentState.onOff;
             ff.temperature = currentState.temperature;
             ff.acMode = currentState.acMode;
@@ -393,6 +404,9 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             ff.swingMode = currentState.swingMode;
             ff.swingStep = currentState.swingStep;
             ff.acError = currentState.acError;
+            if (!xSemaphoreGive(updateStateMutex)) {
+                ESP_LOGW(TAG, "Failed to give update state mutex");
+            }
         } else if (ff.messageType ==
                    static_cast<byte>(FujiMessageType::ERROR)) {
             ESP_LOGD(TAG, "AC ERROR RECV: ");
@@ -416,9 +430,15 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
     } else if (ff.messageDest ==
                static_cast<byte>(FujiAddress::SECONDARY)) {
         seenSecondaryController = true;
+        if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
+            ESP_LOGW(TAG, "Failed to take update state mutex");
+        }
         currentState.controllerTemp =
             ff.controllerTemp;  // we dont have a temp sensor, use the temp
                                 // reading from the secondary controller
+        if (!xSemaphoreGive(updateStateMutex)) {
+            ESP_LOGW(TAG, "Failed to give update state mutex");
+        }
     }
 
     return true;
@@ -519,13 +539,12 @@ byte FujiHeatPump::getSwingMode() { return currentState.swingMode; }
 byte FujiHeatPump::getSwingStep() { return currentState.swingStep; }
 byte FujiHeatPump::getControllerTemp() { return currentState.controllerTemp; }
 
-FujiFrame *FujiHeatPump::getCurrentState() { return &currentState; }
 
 void FujiHeatPump::setState(FujiFrame *state) {
-    FujiFrame *current = this->getCurrentState();
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
+    FujiFrame *current = &this->currentState;
     if (state->onOff != current->onOff) {
         this->setOnOff(state->onOff);
     }
