@@ -5,12 +5,10 @@
 #include "esp_log.h"
 #include "string.h"
 
-static const char* TAG = "FujiHeatPump";
+namespace esphome {
+namespace fujitsu {
 
-// The esphome ESP_LOGx macros expand to reference esp_log_printf_, but do so
-// without using its namespace. https://github.com/esphome/issues/issues/3196
-// The workaround is to pull that particular function into this namespace.
-//using esphome::esp_log_printf_;
+static const char* TAG = "FujiHeatPump";
 
 FujiFrame FujiHeatPump::decodeFrame() {
     FujiFrame ff;
@@ -181,6 +179,7 @@ void heat_pump_uart_event_task(void *pvParameters) {
 }
 
 void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int txPin) {
+    ESP_LOGD("FujitsuClimate", "Connect has been entered!");
     int rc;
     uart_config_t uart_config = {
         .baud_rate = 500,
@@ -231,8 +230,6 @@ void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int
         ESP_LOGI(TAG, "Controller in primary mode");
     }
 
-    this->updateStateMutex = xSemaphoreCreateRecursiveMutex();
-    this->state_dropbox = xQueueCreate(1, sizeof(FujiFrame));
     this->uart_port = uart_port;
     //rc = xTaskCreatePinnedToCore(heat_pump_uart_event_task, "FujiTask", 4096, (void *)this,
     //        // TODO is the priority reasonable? find & investigate the freertosconfig.h
@@ -563,3 +560,6 @@ void FujiHeatPump::setState(FujiFrame *state) {
 }
 
 byte FujiHeatPump::getUpdateFields() { return updateFields; }
+
+}
+}

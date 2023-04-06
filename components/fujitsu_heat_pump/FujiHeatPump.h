@@ -9,6 +9,9 @@
 
 typedef uint8_t byte;
 
+namespace esphome {
+namespace fujitsu {
+
 const byte kModeIndex = 3;
 const byte kModeMask = 0b00001110;
 const byte kModeOffset = 1;
@@ -103,6 +106,10 @@ class FujiHeatPump {
     // This publishes state updates to the climate component
 
    public:
+    FujiHeatPump() {
+        this->updateStateMutex = xSemaphoreCreateRecursiveMutex();
+        this->state_dropbox = xQueueCreate(1, sizeof(FujiFrame));
+    }
     friend void heat_pump_uart_event_task(void *);
     void connect(uart_port_t uart_port, bool secondary,
                            int rxPin = UART_PIN_NO_CHANGE, int txPin = UART_PIN_NO_CHANGE);
@@ -177,3 +184,6 @@ const byte kFanModeUpdateMask = 0b00010000;
 const byte kEconomyModeUpdateMask = 0b00001000;
 const byte kSwingModeUpdateMask = 0b00000100;
 const byte kSwingStepUpdateMask = 0b00000010;
+
+}
+}

@@ -5,12 +5,8 @@
 namespace esphome {
 namespace fujitsu {
 
-static const char* TAG = "FujitsuClimate";
-
 void FujitsuClimate::setup() {
     ESP_LOGD(TAG, "Fuji initialized");
-    memcpy(&(this->sharedState), this->heatPump.getCurrentState(),
-           sizeof(FujiFrame));
 }
 
 optional<climate::ClimateMode> FujitsuClimate::fujiToEspMode(
@@ -170,12 +166,14 @@ void FujitsuClimate::updateState() {
 
 void FujitsuClimate::loop() {
     // Atomically recieve the state when it changes
+#if 0
     ESP_LOGW(TAG, "looping");
     if (xQueueReceive(this->heatPump.state_dropbox, &this->sharedState, pdMS_TO_TICKS(100))) {
         this->updateState();
     } else {
         ESP_LOGW(TAG, "Did not get a state update");
     }
+#endif
 }
 
 void FujitsuClimate::control(const climate::ClimateCall &call) {
