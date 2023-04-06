@@ -2,8 +2,10 @@
 
 // #define DEBUG_FUJI
 #include "FujiHeatPump.h"
+#include "esp_log.h"
+#include "string.h"
 
-#define TAG "FujiHeatPump"
+static const char* TAG = "FujiHeatPump";
 
 // The esphome ESP_LOGx macros expand to reference esp_log_printf_, but do so
 // without using its namespace. https://github.com/esphome/issues/issues/3196
@@ -102,11 +104,10 @@ void FujiHeatPump::encodeFrame(FujiFrame ff) {
 void heat_pump_uart_event_task(void *pvParameters) {
     FujiHeatPump *heatpump = (FujiHeatPump *)pvParameters;
     uart_event_t event;
-    size_t buffered_size;
     TickType_t wakeTime;
     bool pendingFrame;
     while (true) {
-        if(xQueueReceive(heatpump->uart_queue, (void * )&event, (TickType_t)portMAX_DELAY)) {
+        if(xQueueReceive(heatpump->uart_queue, (void * )&event, pdMS_TO_TICKS(1000))) {
             switch(event.type) {
 
                 //Event of UART receving data
@@ -119,9 +120,12 @@ void heat_pump_uart_event_task(void *pvParameters) {
                     if (8 != uart_read_bytes(heatpump->uart_port, heatpump->readBuf, 8, portMAX_DELAY)) {
                         ESP_LOGW(TAG, "Failed to read state update as expected");
                     } else {
+                        ESP_LOGD(TAG, "Got heat pump update frame");
                         heatpump->processReceivedFrame(pendingFrame);
+                        ESP_LOGD(TAG, "Processed heat pump update frame");
                         xQueueOverwrite(heatpump->state_dropbox, &heatpump->currentState);
                         if (pendingFrame) {
+                            ESP_LOGD(TAG, "Now, handling a pending frame txmit");
                             // This causes us to wait until 60 ms have passed since we read wakeTime, so that we account for the processReceivedFrame(). It also allows other tasks to use the core in the meantime because it suspends instead of busy-waiting.
                             vTaskDelayUntil(&wakeTime, pdMS_TO_TICKS(60));
                             if (uart_write_bytes(heatpump->uart_port, (const char*) heatpump->writeBuf, 8) != 8) {
@@ -172,6 +176,7 @@ void heat_pump_uart_event_task(void *pvParameters) {
                     break;
             }
         }
+        ESP_LOGI(TAG, "uart task heartbeat");
     }
 }
 
@@ -214,21 +219,26 @@ void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int
         ESP_LOGW(TAG, "Failed to set uart to half duplex");
         return;
     }
+    ESP_LOGD(TAG, "Serial port configured");
 
     if (secondary) {
         controllerIsPrimary = false;
         controllerAddress = static_cast<byte>(FujiAddress::SECONDARY);
+        ESP_LOGI(TAG, "Controller in secondary mode");
     } else {
         controllerIsPrimary = true;
         controllerAddress = static_cast<byte>(FujiAddress::PRIMARY);
+        ESP_LOGI(TAG, "Controller in primary mode");
     }
 
     this->updateStateMutex = xSemaphoreCreateRecursiveMutex();
-    state_dropbox = xQueueCreate(1, sizeof(FujiFrame));
+    this->state_dropbox = xQueueCreate(1, sizeof(FujiFrame));
     this->uart_port = uart_port;
-    rc = xTaskCreatePinnedToCore(heat_pump_uart_event_task, "FujiTask", 4096, (void *)this,
-            // TODO is the priority reasonable? find & investigate the freertosconfig.h
-                            configMAX_PRIORITIES - 1, NULL /* ignore the task handle */, 1);
+    //rc = xTaskCreatePinnedToCore(heat_pump_uart_event_task, "FujiTask", 4096, (void *)this,
+    //        // TODO is the priority reasonable? find & investigate the freertosconfig.h
+    //                        configMAX_PRIORITIES - 1, NULL /* ignore the task handle */, 1);
+    rc = xTaskCreate(heat_pump_uart_event_task, "FujiTask", 4096, (void *)this,
+                            12, NULL /* ignore the task handle */);
     if (rc != 0) {
         ESP_LOGW(TAG, "Failed to create heat pump event task");
         return;
@@ -236,10 +246,10 @@ void FujiHeatPump::connect(uart_port_t uart_port, bool secondary, int rxPin, int
 }
 
 void FujiHeatPump::printFrame(byte buf[8], FujiFrame ff) {
-    ESP_LOGD("fuji", "%X %X %X %X %X %X %X %X  ", buf[0], buf[1], buf[2],
+    ESP_LOGD(TAG, "%X %X %X %X %X %X %X %X  ", buf[0], buf[1], buf[2],
              buf[3], buf[4], buf[5], buf[6], buf[7]);
     ESP_LOGD(
-        "fuji",
+        TAG,
         " mSrc: %d mDst: %d mType: %d write: %d login: %d unknown: %d onOff: "
         "%d temp: %d, mode: %d cP:%d uM:%d cTemp:%d acError:%d \n",
         ff.messageSource, ff.messageDest, ff.messageType, ff.writeBit,
@@ -257,7 +267,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
     ff = decodeFrame();
 
 #ifdef DEBUG_FUJI
-    ESP_LOGD("fuji", "<-- ");
+    ESP_LOGD(TAG, "<-- ");
     printFrame(readBuf, ff);
 #endif
 
@@ -388,7 +398,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             ff.acError = currentState.acError;
         } else if (ff.messageType ==
                    static_cast<byte>(FujiMessageType::ERROR)) {
-            ESP_LOGD("fuji", "AC ERROR RECV: ");
+            ESP_LOGD(TAG, "AC ERROR RECV: ");
             printFrame(readBuf, ff);
             // handle errors here
             return false;
@@ -397,7 +407,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
         encodeFrame(ff);
 
 #ifdef DEBUG_FUJI
-        ESP_LOGD("fuji", "--> ");
+        ESP_LOGD(TAG, "--> ");
         printFrame(writeBuf, ff);
 #endif
 
@@ -549,6 +559,7 @@ void FujiHeatPump::setState(FujiFrame *state) {
     if (!xSemaphoreGive(updateStateMutex)) {
         ESP_LOGW(TAG, "Failed to give update state mutex");
     }
+    ESP_LOGD(TAG, "Successfully set state");
 }
 
 byte FujiHeatPump::getUpdateFields() { return updateFields; }

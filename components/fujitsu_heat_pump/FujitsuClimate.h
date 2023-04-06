@@ -14,6 +14,13 @@ class FujitsuClimate : public climate::Climate, public Component {
    public:
     void setup() override;
     void loop() override;
+    void late_start() {
+        // c.f. https://github.com/esphome/esphome/blob/acd55b960120265a0a4ce0bd06d08758dce5bbbd/esphome/components/uart/uart_component_esp32_arduino.cpp#L95
+        int8_t tx = this->tx_pin_ != nullptr ? this->tx_pin_->get_pin() : UART_PIN_NO_CHANGE;
+        int8_t rx = this->rx_pin_ != nullptr ? this->rx_pin_->get_pin() : UART_PIN_NO_CHANGE;
+        ESP_LOGD("fuji", "starting task");
+        this->heatPump.connect(UART_NUM_2, !this->is_master_, rx, tx);
+    }
     void control(const climate::ClimateCall &call) override;
     void dump_config() override;
     climate::ClimateTraits traits() override;

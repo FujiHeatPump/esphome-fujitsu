@@ -5,16 +5,12 @@
 namespace esphome {
 namespace fujitsu {
 
+static const char* TAG = "FujitsuClimate";
+
 void FujitsuClimate::setup() {
-    ESP_LOGD("fuji", "Fuji initialized");
+    ESP_LOGD(TAG, "Fuji initialized");
     memcpy(&(this->sharedState), this->heatPump.getCurrentState(),
            sizeof(FujiFrame));
-    // c.f. https://github.com/esphome/esphome/blob/acd55b960120265a0a4ce0bd06d08758dce5bbbd/esphome/components/uart/uart_component_esp32_arduino.cpp#L95
-    int8_t tx = this->tx_pin_ != nullptr ? this->tx_pin_->get_pin() : -1;
-    int8_t rx = this->rx_pin_ != nullptr ? this->rx_pin_->get_pin() : -1;
-    this->heatPump.connect(&Serial2, !this->is_master_, rx, tx);
-    ESP_LOGD("fuji", "starting task");
-    this->heatPump.connect(UART_NUM_2, true);
 }
 
 optional<climate::ClimateMode> FujitsuClimate::fujiToEspMode(
@@ -112,7 +108,7 @@ void FujitsuClimate::updateState() {
 
     // Target temp
     if (this->sharedState.temperature != this->target_temperature) {
-        ESP_LOGD("fuji", "ctrl temp %d vs my temp %f",
+        ESP_LOGD(TAG, "ctrl temp %d vs my temp %f",
                  this->sharedState.temperature, this->target_temperature);
         this->target_temperature = this->sharedState.temperature;
         updated = true;
@@ -122,7 +118,7 @@ void FujitsuClimate::updateState() {
     auto newMode = fujiToEspMode((FujiMode)this->sharedState.acMode);
     if (newMode.has_value() && this->sharedState.onOff &&
         newMode.value() != this->mode) {
-        ESP_LOGD("fuji", "ctrl mode %d vs my mode %d", newMode.value(),
+        ESP_LOGD(TAG, "ctrl mode %d vs my mode %d", newMode.value(),
                  this->mode);
         this->mode = newMode.value();
         updated = true;
@@ -160,29 +156,33 @@ void FujitsuClimate::updateState() {
 
     if (!this->sharedState.onOff &&
         this->mode != climate::ClimateMode::CLIMATE_MODE_OFF) {
-        ESP_LOGD("fuji",
+        ESP_LOGD(TAG,
                  "Controller turned off AC, adding mode change to call");
         this->mode = climate::ClimateMode::CLIMATE_MODE_OFF;
         updated = true;
     }
 
     if (updated) {
-        ESP_LOGD("fuji", "publishing state");
+        ESP_LOGD(TAG, "publishing state");
         this->publish_state();
     }
 }
 
 void FujitsuClimate::loop() {
     // Atomically recieve the state when it changes
-    xQueueReceive(this->heatPump.state_dropbox, &this->sharedState, pdMS_TO_TICKS(100));
-    this->updateState();
+    ESP_LOGW(TAG, "looping");
+    if (xQueueReceive(this->heatPump.state_dropbox, &this->sharedState, pdMS_TO_TICKS(100))) {
+        this->updateState();
+    } else {
+        ESP_LOGW(TAG, "Did not get a state update");
+    }
 }
 
 void FujitsuClimate::control(const climate::ClimateCall &call) {
     bool updated = false;
     if (call.get_mode().has_value()) {
         climate::ClimateMode callMode = call.get_mode().value();
-        ESP_LOGD("fuji", "Fuji setting mode %d", callMode);
+        ESP_LOGD(TAG, "Fuji setting mode %d", callMode);
 
         auto fujiMode = this->espToFujiMode(callMode);
 
@@ -203,7 +203,7 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
         auto callTargetTemp = call.get_target_temperature().value();
         this->sharedState.temperature = callTargetTemp;
         updated = true;
-        ESP_LOGD("fuji", "Fuji setting temperature %f", callTargetTemp);
+        ESP_LOGD(TAG, "Fuji setting temperature %f", callTargetTemp);
     }
 
     if (call.get_preset().has_value()) {
@@ -212,7 +212,7 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
             callPreset == climate::ClimatePreset::CLIMATE_PRESET_ECO ? 1
                                                                      : 0);
         updated = true;
-        ESP_LOGD("fuji", "Fuji setting preset %d", callPreset);
+        ESP_LOGD(TAG, "Fuji setting preset %d", callPreset);
     }
 
     if (call.get_fan_mode().has_value()) {
@@ -222,7 +222,7 @@ void FujitsuClimate::control(const climate::ClimateCall &call) {
             this->sharedState.fanMode = static_cast<byte>(fujiFanMode.value());
         }
         updated = true;
-        ESP_LOGD("fuji", "Fuji setting fan mode %d", this->fan_mode.value_or(-1));
+        ESP_LOGD(TAG, "Fuji setting fan mode %d", this->fan_mode.value_or(-1));
     }
     if (updated) {
         this->heatPump.setState(&(this->sharedState));

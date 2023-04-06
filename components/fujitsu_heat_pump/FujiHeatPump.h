@@ -5,7 +5,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/defines.h"
 
-#include "HardwareSerial.h"
+#include "driver/uart.h"
 
 typedef uint8_t byte;
 
@@ -77,7 +77,6 @@ typedef struct FujiFrames {
 
 class FujiHeatPump {
    private:
-    HardwareSerial *_serial;
     byte readBuf[8];
     byte writeBuf[8];
 
