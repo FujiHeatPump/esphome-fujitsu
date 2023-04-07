@@ -106,9 +106,17 @@ class FujiHeatPump {
     SemaphoreHandle_t updateStateMutex;
     // This publishes state updates to the climate component
 
+    // Not safe b/c no mutexe
+    void setOnOff(bool o);
+    void setTemp(byte t);
+    void setMode(byte m);
+    void setFanMode(byte fm);
+    void setEconomyMode(byte em);
+    void setSwingMode(byte sm);
+    void setSwingStep(byte ss);
    public:
     FujiHeatPump() {
-        this->updateStateMutex = xSemaphoreCreateRecursiveMutex();
+        this->updateStateMutex = xSemaphoreCreateMutex();
         this->state_dropbox = xQueueCreate(1, sizeof(FujiFrame));
     }
     friend void heat_pump_uart_event_task(void *);
@@ -117,17 +125,11 @@ class FujiHeatPump {
     // This publishes state updates to the climate component
     QueueHandle_t state_dropbox;
 
-    bool processReceivedFrame(bool& pendingFrame);
+    void processReceivedFrame(bool& pendingFrame);
+    void sendResponse(FujiFrame& ff, bool& pendingFrame);
     bool isBound();
     bool updatePending();
 
-    void setOnOff(bool o);
-    void setTemp(byte t);
-    void setMode(byte m);
-    void setFanMode(byte fm);
-    void setEconomyMode(byte em);
-    void setSwingMode(byte sm);
-    void setSwingStep(byte ss);
     void setState(FujiFrame * state);
 
     bool getOnOff();

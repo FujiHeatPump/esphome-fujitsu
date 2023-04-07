@@ -118,7 +118,6 @@ void heat_pump_uart_event_task(void *pvParameters) {
                     if (8 != uart_read_bytes(heatpump->uart_port, heatpump->readBuf, 8, portMAX_DELAY)) {
                         ESP_LOGW(TAG, "Failed to read state update as expected");
                     } else {
-                        ESP_LOGD(TAG, "Got heat pump update frame");
                         heatpump->processReceivedFrame(pendingFrame);
                         if (!xSemaphoreTake(heatpump->updateStateMutex, portMAX_DELAY)) {
                             ESP_LOGW(TAG, "Failed to take update state mutex");
@@ -259,7 +258,23 @@ void FujiHeatPump::printFrame(byte buf[8], FujiFrame ff) {
         ff.controllerPresent, ff.updateMagic, ff.controllerTemp, ff.acError);
 }
 
-bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
+
+void FujiHeatPump::sendResponse(FujiFrame& ff, bool& pendingFrame) {
+    encodeFrame(ff);
+
+#ifdef DEBUG_FUJI
+    ESP_LOGD(TAG, "--> ");
+    printFrame(writeBuf, ff);
+#endif
+
+    for (int i = 0; i < 8; i++) {
+        writeBuf[i] ^= 0xFF;
+    }
+
+    pendingFrame = true;
+}
+
+void FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
     FujiFrame ff;
 
     for (int i = 0; i < 8; i++) {
@@ -277,6 +292,7 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
         lastFrameReceived = xTaskGetTickCount();
 
         if (ff.messageType == static_cast<byte>(FujiMessageType::STATUS)) {
+            ESP_LOGD(TAG, "Controller present? %d", ff.controllerPresent);
             if (ff.controllerPresent == 1) {
                 // we have logged into the indoor unit
                 // this is what most frames are
@@ -299,26 +315,17 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
                 ff.messageType = static_cast<byte>(FujiMessageType::STATUS);
             } else {
                 if (controllerIsPrimary) {
+                    ESP_LOGD(TAG, "No controller, asking to log in");
                     // if this is the first message we have received,
                     // announce ourselves to the indoor unit
                     memset(&ff, 0, sizeof(FujiFrame));
                     ff.messageSource = controllerAddress;
                     ff.messageDest = static_cast<byte>(FujiAddress::UNIT);
                     ff.loginBit = true;
-                    ff.controllerPresent = 0;
-                    ff.updateMagic = 0;
-                    ff.unknownBit = false;
-                    ff.writeBit = 0;
                     ff.messageType =
                         static_cast<byte>(FujiMessageType::LOGIN);
-
-                    ff.onOff = 0;
-                    ff.temperature = 0;
-                    ff.acMode = 0;
-                    ff.fanMode = 0;
-                    ff.swingMode = 0;
-                    ff.swingStep = 0;
-                    ff.acError = 0;
+                    sendResponse(ff, pendingFrame);
+                    return;
                 } else {
                     // secondary controller never seems to get any other
                     // message types, only status with controllerPresent ==
@@ -334,6 +341,20 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
                     ff.writeBit = 0;
                 }
             }
+
+#if 0
+            if (ff.acError) {
+                ESP_LOGD(TAG, "Got error, asking for details");
+                memset(&ff, 0, sizeof(FujiFrame));
+                ff.messageSource = controllerAddress;
+                ff.messageDest = static_cast<byte>(FujiAddress::UNIT);
+                ff.updateMagic = 10;
+                ff.messageType =
+                    static_cast<byte>(FujiMessageType::ERROR);
+                sendResponse(ff, pendingFrame);
+                return;
+            }
+#endif
 
             // if we have any updates, set the flags
             if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
@@ -380,6 +401,12 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             if (!xSemaphoreGive(updateStateMutex)) {
                 ESP_LOGW(TAG, "Failed to give update state mutex");
             }
+
+            if (ff.writeBit) {
+                ESP_LOGD(TAG, "Sending field updates");
+                sendResponse(ff, pendingFrame);
+                return;
+            }
         } else if (ff.messageType ==
                    static_cast<byte>(FujiMessageType::LOGIN)) {
             // received a login frame OK frame
@@ -407,26 +434,15 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             if (!xSemaphoreGive(updateStateMutex)) {
                 ESP_LOGW(TAG, "Failed to give update state mutex");
             }
+
+            sendResponse(ff, pendingFrame);
+            return;
         } else if (ff.messageType ==
                    static_cast<byte>(FujiMessageType::ERROR)) {
             ESP_LOGD(TAG, "AC ERROR RECV: ");
             printFrame(readBuf, ff);
             // handle errors here
-            return false;
         }
-
-        encodeFrame(ff);
-
-#ifdef DEBUG_FUJI
-        ESP_LOGD(TAG, "--> ");
-        printFrame(writeBuf, ff);
-#endif
-
-        for (int i = 0; i < 8; i++) {
-            writeBuf[i] ^= 0xFF;
-        }
-
-        pendingFrame = true;
     } else if (ff.messageDest ==
                static_cast<byte>(FujiAddress::SECONDARY)) {
         seenSecondaryController = true;
@@ -440,8 +456,6 @@ bool FujiHeatPump::processReceivedFrame(bool& pendingFrame) {
             ESP_LOGW(TAG, "Failed to give update state mutex");
         }
     }
-
-    return true;
 }
 
 bool FujiHeatPump::isBound() {
@@ -460,74 +474,32 @@ bool FujiHeatPump::updatePending() {
 }
 
 void FujiHeatPump::setOnOff(bool o) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kOnOffUpdateMask;
     updateState.onOff = o ? 1 : 0;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 void FujiHeatPump::setTemp(byte t) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kTempUpdateMask;
     updateState.temperature = t;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 void FujiHeatPump::setMode(byte m) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kModeUpdateMask;
     updateState.acMode = m;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 void FujiHeatPump::setFanMode(byte fm) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kFanModeUpdateMask;
     updateState.fanMode = fm;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 void FujiHeatPump::setEconomyMode(byte em) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kEconomyModeUpdateMask;
     updateState.economyMode = em;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 void FujiHeatPump::setSwingMode(byte sm) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kSwingModeUpdateMask;
     updateState.swingMode = sm;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 void FujiHeatPump::setSwingStep(byte ss) {
-    if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
-        ESP_LOGW(TAG, "Failed to take update state mutex");
-    }
     updateFields |= kSwingStepUpdateMask;
     updateState.swingStep = ss;
-    if (!xSemaphoreGive(updateStateMutex)) {
-        ESP_LOGW(TAG, "Failed to give update state mutex");
-    }
 }
 
 bool FujiHeatPump::getOnOff() { return currentState.onOff == 1 ? true : false; }
@@ -544,9 +516,15 @@ void FujiHeatPump::setState(FujiFrame *state) {
     if (!xSemaphoreTake(updateStateMutex, portMAX_DELAY)) {
         ESP_LOGW(TAG, "Failed to take update state mutex");
     }
+    ESP_LOGD(TAG, "About to get the current state");
+    vTaskDelay(pdMS_TO_TICKS(1000));
     FujiFrame *current = &this->currentState;
     if (state->onOff != current->onOff) {
+        ESP_LOGD(TAG, "About to change onoff");
+        vTaskDelay(pdMS_TO_TICKS(1000));
         this->setOnOff(state->onOff);
+        ESP_LOGD(TAG, "changed onoff");
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     if (state->temperature != current->temperature) {
