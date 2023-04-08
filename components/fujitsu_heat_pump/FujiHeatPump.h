@@ -1,8 +1,16 @@
 /* This file is based on unreality's FujiHeatPump project */
 #pragma once
 
-#include "esphome.h"
-#include "HardwareSerial.h"
+#include "esphome/core/component.h"
+#include "esphome/core/hal.h"
+#include "esphome/core/defines.h"
+
+#include "driver/uart.h"
+
+typedef uint8_t byte;
+
+namespace esphome {
+namespace fujitsu {
 
 const byte kModeIndex = 3;
 const byte kModeMask = 0b00001110;
@@ -72,7 +80,6 @@ typedef struct FujiFrames {
 
 class FujiHeatPump {
    private:
-    HardwareSerial *_serial;
     byte readBuf[8];
     byte writeBuf[8];
 
@@ -80,24 +87,36 @@ class FujiHeatPump {
     bool controllerIsPrimary = true;
     bool seenSecondaryController = false;
     bool controllerLoggedIn = false;
-    unsigned long lastFrameReceived;
+    TickType_t lastFrameReceived;
 
+    // This updateState and updateFields are protected by updateStateMutex in esp-idf
     byte updateFields;
     FujiFrame updateState;
+
     FujiFrame currentState;
 
     FujiFrame decodeFrame();
     void encodeFrame(FujiFrame ff);
     void printFrame(byte buf[8], FujiFrame ff);
 
-    bool pendingFrame = false;
+    QueueHandle_t uart_queue;
+    uart_port_t uart_port;
+    // This protects all accesses of updateState and updateFields
+    SemaphoreHandle_t updateStateMutex;
+    // This publishes state updates to the climate component
 
    public:
-    void connect(HardwareSerial *serial, bool secondary);
-    void connect(HardwareSerial *serial, bool secondary, int rxPin, int txPin);
+    FujiHeatPump() {
+        this->updateStateMutex = xSemaphoreCreateRecursiveMutex();
+        this->state_dropbox = xQueueCreate(1, sizeof(FujiFrame));
+    }
+    friend void heat_pump_uart_event_task(void *);
+    void connect(uart_port_t uart_port, bool secondary,
+                           int rxPin = UART_PIN_NO_CHANGE, int txPin = UART_PIN_NO_CHANGE);
+    // This publishes state updates to the climate component
+    QueueHandle_t state_dropbox;
 
-    bool waitForFrame();
-    void sendPendingFrame();
+    bool processReceivedFrame(bool& pendingFrame);
     bool isBound();
     bool updatePending();
 
@@ -120,7 +139,8 @@ class FujiHeatPump {
     byte getControllerTemp();
 
     FujiFrame *getCurrentState();
-    FujiFrame *getUpdateState();
+    // Removed b/c it's not mutex safe
+    //FujiFrame *getUpdateState();
     
     byte getUpdateFields();
 
@@ -164,3 +184,6 @@ const byte kFanModeUpdateMask = 0b00010000;
 const byte kEconomyModeUpdateMask = 0b00001000;
 const byte kSwingModeUpdateMask = 0b00000100;
 const byte kSwingStepUpdateMask = 0b00000010;
+
+}
+}
