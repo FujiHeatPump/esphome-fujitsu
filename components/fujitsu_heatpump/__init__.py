@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
 fujitsu_heatpump_ns = cg.esphome_ns.namespace("fujitsu_heatpump")
-FujitsuClimate = fujitsu_heatpump_ns.class_("FujitsuClimate", cg.Component, cg.Climate)
+FujitsuClimate = fujitsu_heatpump_ns.class_("FujitsuClimate", cg.Climate, cg.Component)
 
 CONFIG_SCHEMA = cv.Schema(
     {

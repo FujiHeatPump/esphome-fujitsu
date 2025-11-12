@@ -2,8 +2,7 @@
 #include "FujiHeatPump.h"
 #include "esphome.h"
 
-namespace esphome {
-namespace fujitsu_heatpump {
+namespace esphome::fujitsu_heatpump {
 
 class FujitsuClimate : public climate::Climate, public Component {
    public:
@@ -27,5 +26,4 @@ class FujitsuClimate : public climate::Climate, public Component {
     optional<FujiFanMode> espToFujiFanMode(climate::ClimateFanMode espFanMode);
 };
 
-}  // namespace fujitsu_heatpump
-}  // namespace esphome
+}  // namespace esphome::fujitsu_heatpump

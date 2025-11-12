@@ -1,7 +1,6 @@
 #include "fujitsu_heatpump.h"
 
-namespace esphome {
-namespace fujitsu_heatpump {
+namespace esphome::fujitsu_heatpump {
 
 void serialTask(void *pvParameters) {
     FujitsuClimate *climate = (FujitsuClimate *)pvParameters;
@@ -277,5 +276,4 @@ climate::ClimateTraits FujitsuClimate::traits() {
 
     return traits;
 }
-}  // namespace fujitsu_heatpump
-}  // namespace esphome
+}  // namespace esphome::fujitsu_heatpump
